@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,10 +34,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/GetDeviceInformation", handleDeviceInfo)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		setCORS(w, r)
-		w.Write([]byte("okay"))
-	})
+	mux.HandleFunc("/setup", handleSetup)
+	mux.HandleFunc("/", handleRoot)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", servicePort),
@@ -60,18 +59,95 @@ func handleDeviceInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	macID := getDeviceID()
+	deviceID := getDeviceID()
 	xml := fmt.Sprintf(`<?xml version="1.0"?>
 <device type="c" xmlns="http://www.corelationinc.com/deviceLanguage/v1.0" version="2.0.0.0">
   <deviceInformation type="c">
-  <identifier>MAC: %s</identifier>
+  <identifier>DEVICE_ID: %s</identifier>
   <userServicePortNumber>%d</userServicePortNumber>
   </deviceInformation>
-</device>`, macID, servicePort)
+</device>`, deviceID, servicePort)
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.Write([]byte(xml))
 }
+
+func handleRoot(w http.ResponseWriter, r *http.Request) {
+	setCORS(w, r)
+	if hasDeviceID() {
+		deviceID := getDeviceID()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head><title>Keystone Proxy Service</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #333; }
+  .status { background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px; padding: 24px; text-align: center; }
+  .status h1 { color: #2e7d32; margin-top: 0; font-size: 20px; }
+  .device-id { font-family: monospace; background: #fff; padding: 8px 16px; border-radius: 4px; display: inline-block; margin-top: 8px; font-size: 16px; }
+</style></head>
+<body><div class="status"><h1>Service Running</h1><p>Device ID:</p><div class="device-id">%s</div></div></body></html>`, deviceID)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(setupPageHTML))
+}
+
+func handleSetup(w http.ResponseWriter, r *http.Request) {
+	setCORS(w, r)
+	if r.Method != http.MethodPost {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	deviceID := strings.TrimSpace(r.FormValue("device_id"))
+	if deviceID == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	dir := dataDir()
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		http.Error(w, "Failed to create config directory", http.StatusInternalServerError)
+		return
+	}
+	idFile := filepath.Join(dir, "device-id")
+	if err := os.WriteFile(idFile, []byte(deviceID+"\n"), 0600); err != nil {
+		http.Error(w, "Failed to save device ID", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func hasDeviceID() bool {
+	idFile := filepath.Join(dataDir(), "device-id")
+	data, err := os.ReadFile(idFile)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) != ""
+}
+
+const setupPageHTML = `<!DOCTYPE html>
+<html><head><title>Keystone Proxy Service Setup</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 480px; margin: 60px auto; padding: 0 20px; color: #333; }
+  h1 { font-size: 22px; }
+  form { background: #f5f5f5; border-radius: 8px; padding: 24px; }
+  label { display: block; font-weight: 600; margin-bottom: 8px; }
+  input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; font-family: monospace; box-sizing: border-box; }
+  button { margin-top: 16px; padding: 10px 24px; background: #1976d2; color: #fff; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+  button:hover { background: #1565c0; }
+  .help { margin-top: 16px; font-size: 13px; color: #666; line-height: 1.5; }
+</style></head>
+<body>
+<h1>Keystone Proxy Service Setup</h1>
+<form method="POST" action="/setup">
+  <label for="device_id">Enter your Keystone Device ID</label>
+  <input type="text" id="device_id" name="device_id" required placeholder="e.g. my-device-name">
+  <button type="submit">Save</button>
+</form>
+<p class="help">You can find your Device ID in Keystone under<br>
+<strong>Configuration Options → Login Information → Identifier</strong><br>
+Use the part after <code>DEVICE_ID:</code></p>
+</body></html>`
 
 func setCORS(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
@@ -84,26 +160,31 @@ func setCORS(w http.ResponseWriter, r *http.Request) {
 }
 
 func getDeviceID() string {
-	ifaces, err := net.Interfaces()
+	// Check config file first: ~/.keystone-proxy-service/device-id
+	idFile := filepath.Join(dataDir(), "device-id")
+	if data, err := os.ReadFile(idFile); err == nil {
+		id := strings.TrimSpace(string(data))
+		if id != "" {
+			return id
+		}
+	}
+	// Use LocalHostName (Bonjour name) — always clean ASCII, no special characters
+	out, err := exec.Command("scutil", "--get", "LocalHostName").Output()
+	if err == nil {
+		name := strings.TrimSpace(string(out))
+		if name != "" {
+			return name
+		}
+	}
+	// Fall back to hostname
+	host, err := os.Hostname()
 	if err != nil {
 		return "unknown"
 	}
-
-	var macs []string
-	seen := make(map[string]bool)
-	for _, iface := range ifaces {
-		mac := iface.HardwareAddr.String()
-		if mac == "" || mac == "00:00:00:00:00:00" {
-			continue
-		}
-		// Convert to dash-separated uppercase-ish format matching the Node version
-		mac = strings.ReplaceAll(mac, ":", "-")
-		if !seen[mac] {
-			seen[mac] = true
-			macs = append(macs, mac)
-		}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		return host[:i]
 	}
-	return strings.Join(macs, " ")
+	return host
 }
 
 // dataDir returns ~/.keystone-proxy-service for storing certs and runtime data.
