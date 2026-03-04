@@ -21,7 +21,7 @@ import (
 const servicePort = 51763
 
 func main() {
-	certDir := filepath.Join(exeDir(), "certs")
+	certDir := filepath.Join(dataDir(), "certs")
 	certFile := filepath.Join(certDir, "localhost.crt")
 	keyFile := filepath.Join(certDir, "localhost.key")
 
@@ -106,14 +106,13 @@ func getDeviceID() string {
 	return strings.Join(macs, " ")
 }
 
-// exeDir returns the directory containing the running executable.
-// Falls back to working directory if unresolvable.
-func exeDir() string {
-	exe, err := os.Executable()
+// dataDir returns ~/.keystone-proxy-service for storing certs and runtime data.
+func dataDir() string {
+	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
 	}
-	return filepath.Dir(exe)
+	return filepath.Join(home, ".keystone-proxy-service")
 }
 
 func loadOrGenerateCert(certDir, certFile, keyFile string) (tls.Certificate, error) {
