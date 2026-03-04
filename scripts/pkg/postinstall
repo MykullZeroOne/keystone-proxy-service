@@ -1,0 +1,46 @@
+#!/bin/bash
+
+BINARY="/usr/local/bin/keystone-proxy-service"
+PLIST_NAME="com.revfcu.keystone-proxy-service"
+
+# Find the logged-in user (postinstall runs as root)
+LOGGED_IN_USER=$(echo "show State:/Users/ConsoleUser" | scutil | awk '/Name :/ { print $3 }')
+USER_HOME=$(eval echo "~$LOGGED_IN_USER")
+
+# Stop existing service if present
+sudo -u "$LOGGED_IN_USER" launchctl unload "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist" 2>/dev/null
+
+# Create log directory
+mkdir -p "$USER_HOME/.keystone-proxy-service"
+chown "$LOGGED_IN_USER" "$USER_HOME/.keystone-proxy-service"
+
+# Create LaunchAgent plist
+mkdir -p "$USER_HOME/Library/LaunchAgents"
+cat > "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$PLIST_NAME</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$BINARY</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$USER_HOME/.keystone-proxy-service/service.log</string>
+    <key>StandardErrorPath</key>
+    <string>$USER_HOME/.keystone-proxy-service/service.log</string>
+</dict>
+</plist>
+EOF
+chown "$LOGGED_IN_USER" "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+
+# Start the service
+sudo -u "$LOGGED_IN_USER" launchctl load "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+
+exit 0

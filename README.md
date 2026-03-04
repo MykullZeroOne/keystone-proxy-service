@@ -4,50 +4,59 @@ A lightweight macOS background service that emulates the Corelation device ident
 
 **Single binary, zero dependencies.**
 
-## How it works
+## Install
 
-Keystone's web app calls `https://127.0.0.1:51763/GetDeviceInformation` to identify the local machine. On Windows, this is handled by a background service. This binary provides that same endpoint on Mac.
+### Option 1: Download the .pkg (recommended)
 
-## Quick start
+1. Download the latest `.pkg` from [Releases](../../releases/latest)
+2. Double-click to install
+3. The service starts automatically and will auto-start on every login
 
-### Build
+### Option 2: Download the .dmg
 
-    go build -o keystone-proxy-service
+1. Download the latest `.dmg` from [Releases](../../releases/latest)
+2. Open the DMG and double-click the `.pkg` inside
 
-### Install as a background service (auto-starts on login)
+## First-time browser setup
 
-    ./install.sh
-
-### First-time browser setup
+After installing, you need to trust the self-signed certificate once:
 
 1. Open **https://127.0.0.1:51763** in your browser
-2. Accept the self-signed certificate (one time only)
+2. Accept the self-signed certificate
 3. Navigate to your Keystone URL (e.g. `https://keystonedev.revfcu.com:8443/Development/`)
 4. If your device isn't registered, check the **"Insert New Device"** checkbox when prompted
 
-### Uninstall
+## How it works
 
-    ./uninstall.sh
-
-## Distributing to other Mac users
-
-Give them two files:
-- `keystone-proxy-service` (the binary)
-- `install.sh`
-
-They run `./install.sh` — that's it. No Go, Node, or any other runtime needed.
-
-### Cross-compile for Apple Silicon and Intel
-
-    GOOS=darwin GOARCH=arm64 go build -o keystone-proxy-service-arm64
-    GOOS=darwin GOARCH=amd64 go build -o keystone-proxy-service-amd64
-
-Or build a universal binary:
-
-    GOOS=darwin GOARCH=arm64 go build -o keystone-proxy-service-arm64
-    GOOS=darwin GOARCH=amd64 go build -o keystone-proxy-service-amd64
-    lipo -create -output keystone-proxy-service keystone-proxy-service-arm64 keystone-proxy-service-amd64
+Keystone's web app calls `https://127.0.0.1:51763/GetDeviceInformation` to identify the local machine. On Windows, this is handled by a Corelation background service. This binary provides that same endpoint on Mac.
 
 ## Logs
 
     cat ~/.keystone-proxy-service/service.log
+
+## Uninstall
+
+    launchctl unload ~/Library/LaunchAgents/com.revfcu.keystone-proxy-service.plist
+    rm ~/Library/LaunchAgents/com.revfcu.keystone-proxy-service.plist
+    sudo rm /usr/local/bin/keystone-proxy-service
+    rm -rf ~/.keystone-proxy-service
+    sudo pkgutil --forget com.revfcu.keystone-proxy-service
+
+## Development
+
+### Build locally
+
+    go build -o keystone-proxy-service
+
+### Build release artifacts (.pkg + .dmg with universal binary)
+
+    ./scripts/build-release.sh 1.0.0
+
+### Create a release
+
+Push a version tag to trigger the GitHub Actions build:
+
+    git tag v1.0.0
+    git push origin v1.0.0
+
+The workflow builds a universal binary (Apple Silicon + Intel), packages it as a `.pkg` and `.dmg`, and attaches them to a GitHub Release.

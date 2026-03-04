@@ -1,3 +1,8 @@
 certs/
+build/
 keystone-proxy-service
+keystone-proxy-service-arm64
+keystone-proxy-service-amd64
 *.exe
+*.pkg
+*.dmg
