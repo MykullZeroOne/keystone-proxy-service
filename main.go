@@ -46,6 +46,18 @@ func main() {
 	}
 
 	fmt.Printf("Keystone Proxy Service running at https://127.0.0.1:%d\n", servicePort)
+
+	// Auto-open browser to setup page if no device ID configured
+	if !hasDeviceID() {
+		go func() {
+			// Brief delay to let the server start
+			time.Sleep(500 * time.Millisecond)
+			url := fmt.Sprintf("https://127.0.0.1:%d", servicePort)
+			fmt.Printf("No device ID configured — opening setup page: %s\n", url)
+			exec.Command("open", url).Start()
+		}()
+	}
+
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
