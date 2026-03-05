@@ -43,4 +43,14 @@ chown "$LOGGED_IN_USER" "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 # Start the service
 sudo -u "$LOGGED_IN_USER" launchctl load "$USER_HOME/Library/LaunchAgents/$PLIST_NAME.plist"
 
+# Wait for the service to generate its self-signed cert, then trust it
+CERT_FILE="$USER_HOME/.keystone-proxy-service/certs/localhost.crt"
+for i in $(seq 1 10); do
+    [ -f "$CERT_FILE" ] && break
+    sleep 1
+done
+if [ -f "$CERT_FILE" ]; then
+    security add-trusted-cert -r trustRoot -k "$USER_HOME/Library/Keychains/login.keychain-db" "$CERT_FILE" 2>/dev/null
+fi
+
 exit 0
