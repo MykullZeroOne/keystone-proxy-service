@@ -50,7 +50,8 @@ for i in $(seq 1 10); do
     sleep 1
 done
 if [ -f "$CERT_FILE" ]; then
-    security add-trusted-cert -r trustRoot -k "$USER_HOME/Library/Keychains/login.keychain-db" "$CERT_FILE" 2>/dev/null
+    # Run as the logged-in user so the keychain prompt works correctly
+    sudo -u "$LOGGED_IN_USER" security add-trusted-cert -r trustRoot -k "$USER_HOME/Library/Keychains/login.keychain-db" "$CERT_FILE" 2>/dev/null
 fi
 
 exit 0

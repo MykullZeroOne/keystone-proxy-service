@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,6 +59,9 @@ func main() {
 			exec.Command("open", url).Start()
 		}()
 	}
+
+	// Ensure Kerberos ticket exists and start renewal loop
+	go manageKerberosTicket()
 
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
@@ -206,6 +211,121 @@ func dataDir() string {
 		return "."
 	}
 	return filepath.Join(home, ".keystone-proxy-service")
+}
+
+// manageKerberosTicket ensures a valid Kerberos ticket exists and renews it periodically.
+func manageKerberosTicket() {
+	// Brief delay to let the server start first
+	time.Sleep(1 * time.Second)
+
+	ensureKerberosTicket()
+
+	// Renew every 4 hours
+	ticker := time.NewTicker(4 * time.Hour)
+	for range ticker.C {
+		ensureKerberosTicket()
+	}
+}
+
+// ensureKerberosTicket checks for a valid ticket and acquires one if needed.
+func ensureKerberosTicket() {
+	if hasValidKerberosTicket() {
+		fmt.Println("Kerberos ticket is valid")
+		return
+	}
+
+	fmt.Println("No valid Kerberos ticket found, attempting renewal...")
+
+	// Try renewing existing ticket first
+	if out, err := exec.Command("kinit", "-R").CombinedOutput(); err == nil {
+		fmt.Println("Kerberos ticket renewed successfully")
+		_ = out
+		return
+	}
+
+	// Try acquiring via keychain-stored credentials
+	principal := kerberosGetPrincipal()
+	if principal == "" {
+		fmt.Println("Kerberos: could not determine principal, skipping")
+		return
+	}
+
+	if out, err := exec.Command("kinit", "--keychain", principal).CombinedOutput(); err == nil {
+		fmt.Println("Kerberos ticket acquired from keychain for", principal)
+		_ = out
+		return
+	}
+
+	fmt.Println("Kerberos: could not acquire ticket automatically — run 'kinit --keychain", principal+"' manually to save credentials")
+}
+
+// hasValidKerberosTicket checks if klist reports a valid TGT.
+func hasValidKerberosTicket() bool {
+	out, err := exec.Command("klist", "-s").CombinedOutput()
+	_ = out
+	return err == nil
+}
+
+// kerberosGetPrincipal determines the Kerberos principal from existing tickets or the current username + realm.
+func kerberosGetPrincipal() string {
+	// Check if there's a principal in existing (possibly expired) cache
+	out, err := exec.Command("klist").CombinedOutput()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, "Principal:") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					p := strings.TrimSpace(parts[1])
+					if p != "" {
+						return p
+					}
+				}
+			}
+		}
+	}
+
+	// Discover realm from DNS and construct principal from current username
+	realm := kerberosDiscoverRealm()
+	if realm == "" {
+		return ""
+	}
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.Username + "@" + realm
+}
+
+// kerberosDiscoverRealm uses DNS to find the Kerberos realm for the machine's search domain.
+func kerberosDiscoverRealm() string {
+	// Get the DNS search domain from scutil
+	out, err := exec.Command("scutil", "--dns").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+
+	var searchDomain string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "search domain[0]") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				searchDomain = strings.TrimSpace(parts[1])
+				break
+			}
+		}
+	}
+	if searchDomain == "" {
+		return ""
+	}
+
+	// Verify the domain has Kerberos SRV records
+	srvOut, err := exec.Command("dig", "+short", "_kerberos._tcp."+searchDomain, "SRV").CombinedOutput()
+	if err != nil || len(bytes.TrimSpace(srvOut)) == 0 {
+		return ""
+	}
+
+	return strings.ToUpper(searchDomain)
 }
 
 func loadOrGenerateCert(certDir, certFile, keyFile string) (tls.Certificate, error) {
